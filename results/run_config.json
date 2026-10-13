@@ -1,0 +1,16 @@
+{
+ "platform": "Windows-11-10.0.26300-SP0",
+ "processor": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+ "python": "3.14.5",
+ "cryptography": "48.0.0",
+ "ascon_impl": "ascon_c (compiled C, opt64)",
+ "iters_per_run": 1000,
+ "runs": 5,
+ "warmup_runs": 2,
+ "per_iteration_samples": 5000,
+ "randomness": "os.urandom (no PRNG seed); deterministic vectors use a fixed fixture",
+ "reported": {
+  "full_handshake_mean_ms": 0.23312897998839616,
+  "full_handshake_stdev_ms": 0.015916444234194513
+ }
+}

@@ -1,0 +1,77 @@
+(* PFS — merged design (corrected: all messages on the public channel c).
+   One full session between a device and a server runs on the PUBLIC channel, so
+   aG, bG are known to the attacker. After the session (phase 1) K0 and Vi are
+   given to the attacker. K_sess must stay secret: it depends on Z = abG, which
+   the attacker cannot compute (CDH). K_auth is NOT forward secret (it is
+   derivable from K0, Vi, aG, bG) and is deliberately not queried. *)
+free c : channel.
+
+type key.
+type G.
+type exponent.
+
+fun hash(bitstring) : bitstring.
+const VERIFIER : bitstring.
+const PIDINIT : bitstring.
+const a1label : bitstring.
+const m2label : bitstring.
+const m3label : bitstring.
+fun kdf_k0(bitstring, bitstring) : key.
+fun kdf_auth(key, bitstring, G, G) : key.
+fun kdf_sess(key, G, G, G) : key.
+
+fun senc(bitstring, key) : bitstring.
+reduc forall m : bitstring, k : key; sdec(senc(m, k), k) = m.
+fun venc(bitstring, key) : bitstring.
+reduc forall v : bitstring, s : key; vdec(venc(v, s), s) = v.
+
+fun dhexp(G, exponent) : G.
+fun gen() : G.
+equation forall x : exponent, y : exponent;
+    dhexp(dhexp(gen(), x), y) = dhexp(dhexp(gen(), y), x).
+
+fun gb(G) : bitstring [data].
+fun keyToBit(key) : bitstring [data].
+
+free SeedD : bitstring [private].
+free s     : key      [private].
+free PID   : bitstring.
+free T1    : bitstring.
+free testKsess : bitstring [private].
+
+query attacker(testKsess).
+
+let deviceProc(K0 : key) =
+    let Vi = hash((VERIFIER, SeedD)) in
+    new x : exponent;
+    let aG = dhexp(gen(), x) in
+    out(c, (PID, T1, gb(aG), hash((a1label, PID, T1, gb(aG), Vi))));
+    in(c, (gbmsg : bitstring, mac2 : bitstring));
+    let gb(bG) = gbmsg in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    let (=hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))) = mac2 in
+    out(c, hash((keyToBit(Kauth), gb(bG), gb(aG), m3label)));
+    let Z = dhexp(bG, x) in
+    let Ksess = kdf_sess(Kauth, Z, aG, bG) in
+    out(c, senc(testKsess, Ksess)).
+
+let serverProc(K0 : key, storedVerifier : bitstring) =
+    in(c, (=PID, =T1, gamsg : bitstring, A1 : bitstring));
+    let gb(aG) = gamsg in
+    let Vi = vdec(storedVerifier, s) in
+    let (=hash((a1label, PID, T1, gb(aG), Vi))) = A1 in
+    new y : exponent;
+    let bG = dhexp(gen(), y) in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    out(c, (gb(bG), hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))));
+    in(c, mac3 : bitstring);
+    let (=hash((keyToBit(Kauth), gb(bG), gb(aG), m3label))) = mac3 in
+    0.
+
+process
+    let Vi0 = hash((VERIFIER, SeedD)) in
+    let PID0 = hash((PIDINIT, Vi0)) in
+    let K0 = kdf_k0(Vi0, PID0) in
+    let storedVerifier = venc(Vi0, s) in
+    ( deviceProc(K0) | serverProc(K0, storedVerifier)
+    | (phase 1; out(c, (K0, Vi0))) )

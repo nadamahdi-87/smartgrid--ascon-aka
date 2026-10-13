@@ -1,0 +1,105 @@
+(* ESL — merged design (corrected).
+   Ephemeral-secret leakage: the attacker controls the public channel c, runs any
+   number of ordinary sessions, and is GIVEN the ephemeral scalars x and y of the
+   tested session (both parties). K0 and Vi are NOT revealed. K_sess must stay
+   secret because K_auth, which binds the key to the PUF-derived Vi, is unknown. *)
+free c : channel.
+
+type key.
+type G.
+type exponent.
+
+fun hash(bitstring) : bitstring.
+const VERIFIER : bitstring.
+const PIDINIT : bitstring.
+const a1label : bitstring.
+const m2label : bitstring.
+const m3label : bitstring.
+fun kdf_k0(bitstring, bitstring) : key.
+fun kdf_auth(key, bitstring, G, G) : key.
+fun kdf_sess(key, G, G, G) : key.
+
+fun senc(bitstring, key) : bitstring.
+reduc forall m : bitstring, k : key; sdec(senc(m, k), k) = m.
+fun venc(bitstring, key) : bitstring.
+reduc forall v : bitstring, s : key; vdec(venc(v, s), s) = v.
+
+fun dhexp(G, exponent) : G.
+fun gen() : G.
+equation forall x : exponent, y : exponent;
+    dhexp(dhexp(gen(), x), y) = dhexp(dhexp(gen(), y), x).
+
+fun gb(G) : bitstring [data].
+fun keyToBit(key) : bitstring [data].
+
+free SeedD : bitstring [private].
+free s     : key      [private].
+free PID   : bitstring.
+free T1    : bitstring.
+free testKsess : bitstring [private].
+
+query attacker(testKsess).
+
+let deviceTest(K0 : key) =
+    let Vi = hash((VERIFIER, SeedD)) in
+    new x : exponent;
+    out(c, x);                      (* ephemeral scalar of the tested device is REVEALED *)
+    let aG = dhexp(gen(), x) in
+    out(c, (PID, T1, gb(aG), hash((a1label, PID, T1, gb(aG), Vi))));
+    in(c, (gbmsg : bitstring, mac2 : bitstring));
+    let gb(bG) = gbmsg in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    let (=hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))) = mac2 in
+    out(c, hash((keyToBit(Kauth), gb(bG), gb(aG), m3label)));
+    let Z = dhexp(bG, x) in
+    let Ksess = kdf_sess(Kauth, Z, aG, bG) in
+    out(c, senc(testKsess, Ksess)).
+
+let serverTest(K0 : key, storedVerifier : bitstring) =
+    in(c, (=PID, =T1, gamsg : bitstring, A1 : bitstring));
+    let gb(aG) = gamsg in
+    let Vi = vdec(storedVerifier, s) in
+    let (=hash((a1label, PID, T1, gb(aG), Vi))) = A1 in
+    new y : exponent;
+    out(c, y);                      (* ephemeral scalar of the tested server is REVEALED *)
+    let bG = dhexp(gen(), y) in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    out(c, (gb(bG), hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))));
+    in(c, mac3 : bitstring);
+    let (=hash((keyToBit(Kauth), gb(bG), gb(aG), m3label))) = mac3 in
+    0.
+
+let deviceProc(K0 : key) =
+    let Vi = hash((VERIFIER, SeedD)) in
+    new x : exponent;
+    let aG = dhexp(gen(), x) in
+    out(c, (PID, T1, gb(aG), hash((a1label, PID, T1, gb(aG), Vi))));
+    in(c, (gbmsg : bitstring, mac2 : bitstring));
+    let gb(bG) = gbmsg in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    let (=hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))) = mac2 in
+    out(c, hash((keyToBit(Kauth), gb(bG), gb(aG), m3label)));
+    let Z = dhexp(bG, x) in
+    let Ksess = kdf_sess(Kauth, Z, aG, bG) in
+    0.
+
+let serverProc(K0 : key, storedVerifier : bitstring) =
+    in(c, (=PID, =T1, gamsg : bitstring, A1 : bitstring));
+    let gb(aG) = gamsg in
+    let Vi = vdec(storedVerifier, s) in
+    let (=hash((a1label, PID, T1, gb(aG), Vi))) = A1 in
+    new y : exponent;
+    let bG = dhexp(gen(), y) in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    out(c, (gb(bG), hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))));
+    in(c, mac3 : bitstring);
+    let (=hash((keyToBit(Kauth), gb(bG), gb(aG), m3label))) = mac3 in
+    0.
+
+process
+    let Vi0 = hash((VERIFIER, SeedD)) in
+    let PID0 = hash((PIDINIT, Vi0)) in
+    let K0 = kdf_k0(Vi0, PID0) in
+    let storedVerifier = venc(Vi0, s) in
+    ( deviceTest(K0) | serverTest(K0, storedVerifier)
+    | (!deviceProc(K0)) | (!serverProc(K0, storedVerifier)) )

@@ -1,0 +1,71 @@
+(* =====================================================================
+   ProVerif — KCI for the MERGED design (piggyback)
+   aG/bG are the session nonces; K0 is revealed to the attacker.
+   Claim: server-to-device authentication survives K0 leakage,
+   because M2's MAC binds V_i (via K_auth), and V_i is PUF-protected.
+   K0 = kdf_k0(Vi, PID0), PID0 = hash(PIDINIT, Vi) -- fixed, not the
+   rotating wire PID used in M1/A1.
+   ===================================================================== *)
+
+free c : channel.
+type key. type G. type exponent.
+
+fun hash(bitstring) : bitstring.
+const VERIFIER : bitstring.
+const PIDINIT : bitstring.
+const a1label : bitstring.
+const m2label : bitstring.
+fun kdf_k0(bitstring, bitstring) : key.
+fun kdf_auth(key, bitstring, G, G) : key.
+
+fun venc(bitstring, key) : bitstring.
+reduc forall v : bitstring, s : key; vdec(venc(v, s), s) = v.
+
+fun dhexp(G, exponent) : G.
+fun gen() : G.
+fun gb(G) : bitstring [data].
+fun keyToBit(key) : bitstring [data].
+
+free SeedD : bitstring [private].
+free s     : key      [private].
+free PID   : bitstring.
+free T1    : bitstring.
+
+event deviceAcceptsServer(G, G).
+event serverGenuine(G, G).
+
+query ga : G, gbv : G;
+    inj-event(deviceAcceptsServer(ga, gbv)) ==> inj-event(serverGenuine(ga, gbv)).
+
+let deviceProc(K0 : key) =
+    let Vi = hash((VERIFIER, SeedD)) in
+    new x : exponent;
+    let aG = dhexp(gen(), x) in
+    let A1 = hash((a1label, PID, T1, gb(aG), Vi)) in
+    out(c, (PID, T1, gb(aG), A1));
+    in(c, (gbmsg : bitstring, mac2 : bitstring));
+    let gb(bG) = gbmsg in
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    let (=hash((keyToBit(Kauth), gb(aG), gb(bG), m2label))) = mac2 in
+    event deviceAcceptsServer(aG, bG).
+
+let serverProc(K0 : key, storedVerifier : bitstring) =
+    in(c, (=PID, =T1, gamsg : bitstring, A1 : bitstring));
+    let gb(aG) = gamsg in
+    let Vi = vdec(storedVerifier, s) in
+    let (=hash((a1label, PID, T1, gb(aG), Vi))) = A1 in
+    new y : exponent;
+    let bG = dhexp(gen(), y) in
+    event serverGenuine(aG, bG);
+    let Kauth = kdf_auth(K0, Vi, aG, bG) in
+    out(c, (gb(bG), hash((keyToBit(Kauth), gb(aG), gb(bG), m2label)))).
+
+process
+    let Vi0 = hash((VERIFIER, SeedD)) in
+    (* PID0 derived from Vi0, distinct from the rotating wire PID
+       used in M1/A1 -- see proverif_merged_base.pv header for detail. *)
+    let PID0 = hash((PIDINIT, Vi0)) in
+    let K0 = kdf_k0(Vi0, PID0) in
+    let storedVerifier = venc(Vi0, s) in
+    out(c, K0);                              (* attacker is GIVEN K0 *)
+    ( (!deviceProc(K0)) | (!serverProc(K0, storedVerifier)) )
